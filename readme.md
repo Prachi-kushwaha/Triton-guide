@@ -28,4 +28,121 @@ print(f"GPU: {torch.cuda.get_device_name(0)}")
 print(f"CUDA capability: {torch.cuda.get_device_capability(0)}")
 ```
 
-## Core concepts
+## Core Concepts
+
+## What is tile?
+A small chunk/sub-part of data processed together by one GPU program.
+it can be:
+
+1 a slice of an array
+2 a sub-part of a matrix
+3 even a small cube of tensor data
+
+## 1D tile(Arrays):
+Large array: [1,2,3,4,5,6,7,8]
+Tile 1:- [1,2,3,4]
+Tile 2:- [5,6,7,8]
+
+Each Triton program processes one tile.
+
+## 2D Tile(Matrix Block)
+[
+ [1,2,3,4],
+ [5,6,7,8],
+ [9,10,11,12],
+ [13,14,15,16]
+]
+
+Split into 2×2 tiles:
+
+Tile A:
+[1 2]
+[5 6]
+
+Tile B:
+[3 4]
+[7 8]
+Tile C:
+[ 9 10]
+[13 14]
+
+Tile D:
+[11 12]
+[15 16]
+
+Operations happen tile-by-tile.
+
+## 3D Tile (Tensor Cube)
+
+For deep learning tensors:
+[BATCH, HEIGHT, WIDTH]
+a tile can be:
+
+small cube/chunk of tensor data
+Example:
+4x4x4 cube
+
+## Why Tiles Exist
+
+GPUs are optimized for:
+many small parallel operations Instead of:
+processing one element at a time
+GPUs process:
+entire tiles at once which is much faster.
+
+## We will start with examples
+```python
+[
+ [ 1,  2,  3,  4],
+ [ 5,  6,  7,  8],
+ [ 9, 10, 11, 12],
+ [13, 14, 15, 16]
+]
+
+BLOCK_M = 2
+BLOCK_N = 2
+
+Program 0:
+[1 2]
+[5 6]
+
+Program 1:
+[3 4]
+[7 8]
+
+Program 2:
+[ 9 10]
+[13 14]
+
+Program 3:
+[11 12]
+[15 16]
+```
+
+## Program ID
+worker handling one tile
+
+```python
+## each kernel launch spawns many programs. this is your block's unique index, similar to pythonblockIdx in CUDA
+tl.program_id(axis)
+```
+
+## Block Pointer
+How much data do I process?
+```python
+## creates a range of offsets within your block. you add this to a base pointer to address a tile of memory
+tl.arange(0, BLOCK)
+```
+
+```triton
+pid = tl.program_id(0)
+
+rows = pid * BLOCK_M + tl.arange(0, BLOCK_M)
+cols = tl.arange(0, BLOCK_N)
+```
+
+
+
+
+
+
