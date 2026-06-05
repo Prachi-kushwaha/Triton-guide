@@ -32,20 +32,23 @@ print(f"CUDA capability: {torch.cuda.get_device_capability(0)}")
 
 ## What is tile?
 A small chunk/sub-part of data processed together by one GPU program.
-it can be:
+* it can be:
 
-1 a slice of an array
-2 a sub-part of a matrix
-3 even a small cube of tensor data
+1. a slice of an array
+2. a sub-part of a matrix
+3. even a small cube of tensor data
 
 ## 1D tile(Arrays):
+```python
 Large array: [1,2,3,4,5,6,7,8]
 Tile 1:- [1,2,3,4]
 Tile 2:- [5,6,7,8]
+```
 
-Each Triton program processes one tile.
+* Each Triton program processes one tile.
 
 ## 2D Tile(Matrix Block)
+```python
 [
  [1,2,3,4],
  [5,6,7,8],
@@ -69,26 +72,23 @@ Tile C:
 Tile D:
 [11 12]
 [15 16]
+```
 
-Operations happen tile-by-tile.
+* Operations happen tile-by-tile.
 
 ## 3D Tile (Tensor Cube)
 
-For deep learning tensors:
-[BATCH, HEIGHT, WIDTH]
-a tile can be:
+For deep learning tensors:--[BATCH, HEIGHT, WIDTH]
+* a tile can be:
 
 small cube/chunk of tensor data
-Example:
-4x4x4 cube
+* Example:
+* 4x4x4 cube
 
 ## Why Tiles Exist
 
-GPUs are optimized for:
-many small parallel operations Instead of:
-processing one element at a time
-GPUs process:
-entire tiles at once which is much faster.
+1. GPUs are optimized for many small parallel operations Instead of processing one element at a time
+2. GPUs process entire tiles at once which is much faster.
 
 ## We will start with examples
 ```python
