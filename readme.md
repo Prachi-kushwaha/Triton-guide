@@ -399,3 +399,36 @@ def matmul(a, b):
     return c
 
 ```
+
+## Kernel Fusion: Fused Softmax
+Fusion is Triton's killer feature. Instead of writing a value to HBM and reading it back for the next op, you keep it in registers. A fused softmax loads each row once instead of three times (for max, sum, and normalize).
+
+```python
+@triton.jit
+def softmax_kernel(output_ptr, input_ptr,input_row_stride, output_row_stride,  M, N,  Block_size:tl.constexpr):
+    row_idx = tl.program_id(0)
+    row_start_ptr = input_ptr * row_idx + input_row_stride
+
+    col_offests = tl.arange(0, Block_size)
+    mask = col_offsets < M
+
+    row = tl.load(row_start_ptr * col_offsets, mask=mask, other=-float('inf'))
+
+    row_minus_max = row - tl.max(row, axis=0)
+    numerator = tl.exp(row_minus_exp)
+    denominator = tl.sum(row_exp)
+    softmax = numerator / denominator
+
+    out_start = (output_str + col_offsets, softmax, mask=mask)
+
+def softmax(x):
+    n_rows, n_cols = x.shape
+    Block_size = triton.next_power_of_2(n_cols)
+    y = torch.empty_like(x)
+    softmax_kernel[(n_rows,)](
+        y, x, x.stride(0), y.stride(0), n_rows, n_cols,
+        BLOCK_SIZE=BLOCK_SIZE, num_warps=4,
+    )
+    return y
+
+```
