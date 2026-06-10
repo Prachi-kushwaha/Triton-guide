@@ -1,4 +1,4 @@
-# Triton:GPU Programming A to Z?
+## Triton from CUDA mindset to real kernels
 
 ## What is Triton
 Triton is open-source programming language and compiler developed by OPENAI. it lets you write high-performance CUDA kernels in python. triton sits betweeen CUDA(too low-level) and pytorch(too high-level)
