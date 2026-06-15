@@ -153,8 +153,10 @@ tl.load(ptr, mask)
 # why mask
 offsets = [0,1,2,3]
 data = [10,20,30]
-without mask it try to read ptr+3 which is outside valid memory
-So triton used:
+
+# without mask it try to read ptr+3 which is outside valid memory
+# So triton used:
+
 n_elements = len(data)
 mask = offsets < n_elements
 mask = [True, True, True, False]
@@ -220,10 +222,10 @@ def add(x:torch.Tensor, y:torch.Tensor) -> torch.Tensor:
 ```python
 # Testing
 torch.manual_seed(0)
-a = torch.rand(98432, device='cuda')
-b = torch.rand(98432, device='cuda')
-triton.output = add(a,b)
-torch.output = a + b
+x = torch.rand(98432, device='cuda')
+y = torch.rand(98432, device='cuda')
+triton.output = add(x,y)
+torch.output = x + y
 
 print(f"Max diff: {(triton_output - torch_output).abs().max():.6f}")
 ```
@@ -252,7 +254,12 @@ Used to access tensor elements.
 
 ## Pointer arithmatic
 ```python
-ptr + row * stride + col
+
+#this formula is used to compute the memory address of an element in a 2D array stored in row-major order.
+
+ptr + row * stride_row + col * stride_col
+# for a contiguous row-major pytorch tensor stride_col = 1
+
 where:
 row = row_index
 col = col_index
@@ -270,18 +277,18 @@ which is points to 6
 ```python
 ## python - 2D pointer blocks
 @triton.jit
-def matrix_kernel(A_ptr, B_ptr, stride_am, stride_an, M, N, BLOCK_M:tl.constexpr, BLOCK_N:tl.constexpr):
+def matrix_kernel(x_ptr, output_ptr, stride_xm, stride_xn, M, N, BLOCK_M:tl.constexpr, BLOCK_N:tl.constexpr):
        pid_m = tl.program_id(0)
        pid_n = tl.program_id(1)
 
        row_offsets = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
        col_offsets = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
 
-       ptrs = (A_ptr + row_offset[:, None] * stride_am + col_offset[None, :] * stride_an)
+       ptrs = (x_ptr + row_offset[:, None] * stride_xm + col_offset[None, :] * stride_xn)
 
        mask = (row_offset[:, None] < M) & (col_offset[None, :] < N)
        tile = tl.load(ptrs, mask=mask, other=0.0)
-       tl.store(B_ptr + row_offset[:, None] * stride_am + col_offset[None, :] *  stride_an , tile * 2.0, mask=mask)
+       tl.store(output_ptr + row_offset[:, None] * stride_xm + col_offset[None, :] *  stride_xn , tile * 2.0, mask=mask)
 
 ```
 
@@ -289,9 +296,9 @@ def matrix_kernel(A_ptr, B_ptr, stride_am, stride_an, M, N, BLOCK_M:tl.constexpr
 #using tl.make_block_ptr()
 
 a_block_ptr = tl.make_block_ptr(
-    base=A_ptr,
+    base=x_ptr,
     shape=(M, N),
-    strides=(stride_am, stride_an),
+    strides=(stride_xm, stride_xn),
     offsets=(pid_m * BLOCK_M, 0),
     block_shape=(BLOCK_M, BLOCK_N),
     order=(1,0)
@@ -321,21 +328,20 @@ def reduction_demo(x_ptr, out_ptr, M, N, Block_N:tl.constexpr):
     x_shifted = x - row_max
     log_sum_exp = tl.log(tl.sum(tl.exp(x_shifted), axis=0)) + row_max
 
-    tl.store(out_ptr + row, log_sum_exp)
+    tl.store(out_ptr + offsets, log_sum_exp)
 ```
 
 ```python
 @triton.jit
-def row_col_reduce(X_ptr, row_out, col_out, M, N,
-                   BM: tl.constexpr, BN: tl.constexpr):
+def row_col_reduce(X_ptr, row_out, col_out, M, N, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
     pid = tl.program_id(0)
-    rows = pid * BM + tl.arange(0, BM)
-    cols = tl.arange(0, BN)
+    rows = pid * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
+    cols = tl.arange(0, BLOCK_SIZE_N)
     x = tl.load(X_ptr + rows[:, None] * N + cols[None, :])
 
-    # axis=1: reduce across columns → shape [BM]
+    # axis=1: reduce across columns → shape [BLOCK_SIZE_M]
     row_sums = tl.sum(x, axis=1)
-    # axis=0: reduce across rows → shape [BN]
+    # axis=0: reduce across rows → shape [BLOCK_SIZE_N]
     col_sums = tl.sum(x, axis=0)
     tl.store(row_out + rows, row_sums)
     tl.store(col_out + cols, col_sums)
@@ -417,7 +423,7 @@ def softmax_kernel(output_ptr, input_ptr,input_row_stride, output_row_stride,  M
 
     row_minus_max = row - tl.max(row, axis=0)
     numerator = tl.exp(row_minus_exp)
-    denominator = tl.sum(row_exp)
+    denominator = tl.sum(numerator)
     softmax = numerator / denominator
 
     out_start = (output_str + col_offsets, softmax, mask=mask)
