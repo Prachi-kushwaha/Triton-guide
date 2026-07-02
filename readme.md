@@ -1,7 +1,7 @@
 # Triton from CUDA mindset to real kernels
 
 ## What is Triton
-Triton is open-source programming language and compiler developed by OPENAI. it lets you write high-performance CUDA kernels in python. triton sits betweeen CUDA(too low-level) and pytorch(too high-level)
+Triton is open-source programming language and compiler developed by OPENAI. it lets you write high-performance CUDA kernels in python. triton sits between CUDA(too low-level) and pytorch(too high-level)
 
 ## Why not raw CUDA?
 CUDA requires managing thread blocks, warps shared memory layouts, bank conflicts, and register pressure manually. Triton automates these while letting you control algorithmic structure
@@ -15,7 +15,7 @@ pip install torch
 pip install triton
 
 ## Verify GPU and triton
-python -c "import triton, import torch, print(torch.cuda.get_device_name(0))"
+python -c "import triton; import torch; print(torch.cuda.get_device_name(0))"
 ```
 
 ```python
@@ -39,7 +39,7 @@ A small chunk/sub-part of data processed together by one GPU program.
 3. even a small cube of tensor data
 
 ## 1D tile(Arrays):
-```python
+```bash
 Large array: [1,2,3,4,5,6,7,8]
 Tile 1:- [1,2,3,4]
 Tile 2:- [5,6,7,8]
@@ -48,7 +48,7 @@ Tile 2:- [5,6,7,8]
 * Each Triton program processes one tile.
 
 ## 2D Tile(Matrix Block)
-```python
+```bash
 [
  [1,2,3,4],
  [5,6,7,8],
@@ -88,7 +88,7 @@ For deep learning tensors:--[BATCH, HEIGHT, WIDTH]
 2. GPUs process entire tiles at once which is much faster.
 
 ## We will start with examples
-```python
+```bash
 [
  [ 1,  2,  3,  4],
  [ 5,  6,  7,  8],
@@ -117,21 +117,22 @@ Program 3:
 ```
 
 ## Program ID
-worker handling one tile
+Each Triton program is responsible for processing one tile of data.
+Each program has a unique Program ID.
 
-```python
-## each kernel launch spawns many programs. this is your block's unique index, similar to pythonblockIdx in CUDA
+```bash
+## each kernel launch spawns many programs. this is your block's unique index, similar to CUDA's blockIdx.x
 tl.program_id(axis)
 ```
 
-## Block Pointer
+## Block Offsets
 How much data do I process?
-```python
+```bash
 ## creates a range of offsets within your block. you add this to a base pointer to address a tile of memory
 tl.arange(0, BLOCK)
 ```
 
-```python
+```bash
 pid = tl.program_id(0)
 
 rows = pid * BLOCK_M + tl.arange(0, BLOCK_M)
@@ -139,17 +140,17 @@ cols = tl.arange(0, BLOCK_N)
 ```
 
 ## Load/Store
-```python
+```bash
 ## Go to this memory location and read values
 eg. data = [10,20,30,40]
 x = tl.load(ptr)
 it reads 10
 ## Loading multiple values
 offsets = [0,1,2,3]
-x = tl.load(ptr+offsetc)
+x = tl.load(ptr+offsets)
 it reads [10,20,30,40]
 
-tl.load(ptr, mask)
+tl.load(ptr+offsets, mask=mask)
 # why mask
 offsets = [0,1,2,3]
 data = [10,20,30]
@@ -163,11 +164,11 @@ mask = [True, True, True, False]
 x = tl.load(ptr + offsets, mask=mask)
 
 ```
-```python
+```bash
 
 ## Write values back into memory
 val = [2,4,6,8]
-tl.store(pts, val, mask)
+tl.store(ptr, val, mask=mask)
 so it writes [2,4,6,8] into GPU memory
 
 
@@ -175,38 +176,38 @@ tl.store(ptr + offsets, x, mask=mask)
 ```
 
 ## Constexpr
-```python
+```bash
 ## block sizes must be compile-time constants (powers of 2). This allows the compiler to fully unroll loops and optimize memory access.
 tl.constexpr
 ```
 
-```python
+```bash
 @triton.jit
 def my_kernel(in_ptr, out_ptr, n, BLOCK:tl.constexpr):
     pid = tl.program_id(0)            # which block am I?
     offsets = pid * BLOCK + tl.arange(0, BLOCK)     # block's indices
     mask  = offsets < n            # guard out-of-bounds
-    x = tl.load(in_ptr + offsets, mask)      # read global memory
-    tl.store(out_ptr + offsets, x*2.0, mask)    # write global memory
+    x = tl.load(in_ptr + offsets, mask=mask)      # read global memory
+    tl.store(out_ptr + offsets, x*2.0, mask=mask)    # write global memory
 ```
 
 ## Lets write out first kernel : Vector Addition
-```python
+```bash
 import torch
 import triton
 import triton.language as tl
 
-@trition.jit
+@triton.jit
 def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE:tl.constexpr):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     mask = offsets < n_elements
 
-    x = tl.load(x_ptr + offests, mask=mask)
-    y = tl.load(y_ptr + offests, mask=mask)
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
     output = x + y
-    tl.store(output_ptr + offsets, output, mask)
+    tl.store(output_ptr + offsets, output, mask=mask)
 
 def add(x:torch.Tensor, y:torch.Tensor) -> torch.Tensor:
     output = torch.empty_like(x)
@@ -215,25 +216,25 @@ def add(x:torch.Tensor, y:torch.Tensor) -> torch.Tensor:
 
     # grid = number of programs to launch
     grid = lambda meta: (triton.cdiv(n_elements, meta['BLOCK_SIZE']),)
-    add_kernel[grid][x,y,output, n_elements, BLOCk_SIZE=1024]
+    add_kernel[grid](x,y,output, n_elements, BLOCK_SIZE=1024)
     return output
 ```
 
-```python
+```bash
 # Testing
 torch.manual_seed(0)
 x = torch.rand(98432, device='cuda')
 y = torch.rand(98432, device='cuda')
-triton.output = add(x,y)
-torch.output = x + y
+triton_output = add(x,y)
+torch_output = x + y
 
 print(f"Max diff: {(triton_output - torch_output).abs().max():.6f}")
 ```
 
-## Memory Layout & Pointer arithmatic
-Efficient memory access is what separates fast kernels from slow ones. Triton gives you tools to express 2D tile addressing, strided access, and coalesced reads.
+## Memory Layout & Pointer arithmetic
+Efficient memory access is what separates fast kernels from slow ones. Triton gives you tools to express 2D tile addressing, stride access, and coalesced reads.
 
-```python
+```bash
 [
     [1,2,3],
     [4,5,6]
@@ -253,7 +254,7 @@ Used to access tensor elements.
 ```
 
 ## Pointer arithmatic
-```python
+```bash
 
 #this formula is used to compute the memory address of an element in a 2D array stored in row-major order.
 
@@ -263,9 +264,9 @@ ptr + row * stride_row + col * stride_col
 where:
 row = row_index
 col = col_index
-stride = number of elements per row
+stride = Stride is the distance {in elements} between consecutive indices along a dimension.
 ```
-```python
+```bash
 [
     [1,2,3],
     [4,5,6]
@@ -274,7 +275,7 @@ to access matrix[1][2] we use this formula (ptr + row * stride + col) = ptr + 1 
 which is points to 6
 ```
 
-```python
+```bash
 ## python - 2D pointer blocks
 @triton.jit
 def matrix_kernel(x_ptr, output_ptr, stride_xm, stride_xn, M, N, BLOCK_M:tl.constexpr, BLOCK_N:tl.constexpr):
@@ -284,15 +285,15 @@ def matrix_kernel(x_ptr, output_ptr, stride_xm, stride_xn, M, N, BLOCK_M:tl.cons
        row_offsets = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
        col_offsets = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
 
-       ptrs = (x_ptr + row_offset[:, None] * stride_xm + col_offset[None, :] * stride_xn)
+       ptrs = (x_ptr + row_offsets[:, None] * stride_xm + col_offsets[None, :] * stride_xn)
 
-       mask = (row_offset[:, None] < M) & (col_offset[None, :] < N)
+       mask = (row_offsets[:, None] < M) & (col_offsets[None, :] < N)
        tile = tl.load(ptrs, mask=mask, other=0.0)
-       tl.store(output_ptr + row_offset[:, None] * stride_xm + col_offset[None, :] *  stride_xn , tile * 2.0, mask=mask)
+       tl.store(output_ptr + row_offsets[:, None] * stride_xm + col_offsets[None, :] *  stride_xn , tile * 2.0, mask=mask)
 
 ```
 
-```python
+```bash
 #using tl.make_block_ptr()
 
 a_block_ptr = tl.make_block_ptr(
@@ -311,15 +312,15 @@ a_block_ptr = tl.advance(a_block_ptr, (0, BLOCK_K))  # move right
 ## Reductions
 Triton provides built-in reduction operations that map to efficient warp-level and block-level reduce instructions. Use these instead of manual loops.
 
-```python
+```bash
 @triton.jit
 
-def reduction_demo(x_ptr, out_ptr, M, N, Block_N:tl.constexpr):
+def reduction_demo(x_ptr, out_ptr, M, N, BLOCK_N:tl.constexpr):
     row = tl.program_id(0)
     offsets = tl.arange(0, BLOCK_N)
     mask = offsets < N
 
-    x = tl.load(x_ptr + row * N + offsets, mask=mask, other=None)
+    x = tl.load(x_ptr + row * N + offsets, mask=mask, other=0.0)
 
     row_max = tl.max(x, axis=0) # max across axis 0
     row_sum = tl.sum(x, axis=0) # sum across axis 0
@@ -328,10 +329,10 @@ def reduction_demo(x_ptr, out_ptr, M, N, Block_N:tl.constexpr):
     x_shifted = x - row_max
     log_sum_exp = tl.log(tl.sum(tl.exp(x_shifted), axis=0)) + row_max
 
-    tl.store(out_ptr + offsets, log_sum_exp)
+    tl.store(out_ptr + offsets, log_sum_exp, mask=mask)
 ```
 
-```python
+```bash
 @triton.jit
 def row_col_reduce(X_ptr, row_out, col_out, M, N, BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr):
     pid = tl.program_id(0)
@@ -349,7 +350,7 @@ def row_col_reduce(X_ptr, row_out, col_out, M, N, BLOCK_SIZE_M: tl.constexpr, BL
 ## Matrix multiplication(GEMM)
 Matrix multiply is the most important kernel in deep learning. The Triton approach tiles both A and B, accumulating partial products in SRAM. This achieves near-cuBLAS performance with far less code
 
-```python
+```bash
 @triton.jit
 def matmul_kernel(
     A_ptr, B_ptr, C_ptr,
@@ -357,24 +358,24 @@ def matmul_kernel(
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
-    Block_M:tl.constexpr, Block_N:tl.constexpr, Block_K:tl.constexpr
+    BLOCK_M:tl.constexpr, BLOCK_N:tl.constexpr, BLOCK_K:tl.constexpr
 ):
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
 
-    m_offset = pid * Block_M + tl.arange(0, Block_M)
-    n_offset = pid * Block_N + tl.arange(0, Block_N)
+    m_offsets = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    n_offsets = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
 
     acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
-    for k in range(0, tl.cdiv(K, Block_K)):
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
         k_offsets = k * BLOCK_K + tl.arange(0, BLOCK_K)
 
         a_mask = (m_offsets[:, None] < M) & (k_offsets[None, :] < K)
-        a = tl.load(A_ptr + m_offset[:, None] * strided_am + k_offsets[None, :] * strided_ak, mask=a_mask, other=0.0)
+        a = tl.load(A_ptr + m_offsets[:, None] * stride_am + k_offsets[None, :] * stride_ak, mask=a_mask, other=None)
 
         b_mask = (k_offsets[:, None] < K) & (n_offsets[None, :] < N)
-        b = tl.load(B_ptr + k_offsets[:, None] * stride_bk + n_offsets[None, :] * stride_bn, mask=b_mask, other=0.0)
+        b = tl.load(B_ptr + k_offsets[:, None] * stride_bk + n_offsets[None, :] * stride_bn, mask=b_mask, other=None)
 
         # Tensor-core matrix multiply-accumulate
         acc += tl.dot(a, b)
@@ -410,27 +411,30 @@ def matmul(a, b):
 Fusion is Triton's killer feature. Instead of writing a value to HBM and reading it back for the next op, you keep it in registers. A fused softmax loads each row once instead of three times (for max, sum, and normalize).
 
 * The num_warps launch parameter controls how many warps collaborate per program (default: 4). Larger blocks benefit from more warps. Tune this alongside BLOCK_SIZE.
-```python
+```bash
 @triton.jit
-def softmax_kernel(output_ptr, input_ptr,input_row_stride, output_row_stride,  M, N,  Block_size:tl.constexpr):
+def softmax_kernel(output_ptr, input_ptr,input_row_stride, output_row_stride,  M, N,  BLOCK_SIZE:tl.constexpr):
     row_idx = tl.program_id(0)
-    row_start_ptr = input_ptr * row_idx + input_row_stride
+    row_start_ptr = input_ptr + row_idx * input_row_stride
 
-    col_offests = tl.arange(0, Block_size)
-    mask = col_offsets < M
+    col_offsets = tl.arange(0, BLOCK_SIZE)
+    mask = col_offsets < N
 
-    row = tl.load(row_start_ptr * col_offsets, mask=mask, other=-float('inf'))
+    row = tl.load(row_start_ptr + col_offsets, mask=mask, other=-float('inf'))
 
     row_minus_max = row - tl.max(row, axis=0)
-    numerator = tl.exp(row_minus_exp)
-    denominator = tl.sum(numerator)
+    numerator = tl.exp(row_minus_max)
+    denominator = tl.sum(numerator, axis=0)
     softmax = numerator / denominator
 
-    out_start = (output_str + col_offsets, softmax, mask=mask)
+    tl.store(output_ptr + row_idx * output_row_stride + col_offsets,
+         softmax,
+         mask=mask)
+
 
 def softmax(x):
     n_rows, n_cols = x.shape
-    Block_size = triton.next_power_of_2(n_cols)
+    BLOCK_SIZE = triton.next_power_of_2(n_cols)
     y = torch.empty_like(x)
     softmax_kernel[(n_rows,)](
         y, x, x.stride(0), y.stride(0), n_rows, n_cols,
@@ -444,7 +448,7 @@ def softmax(x):
 
 Rather than guessing tile sizes, @triton.autotune benchmarks a set of configs and caches the best one per input shape. This is the recommended approach for production kernels.
 
-```python
+```bash
 import triton
 
 @triton.autotune(
@@ -485,7 +489,7 @@ def autotuned_matmul_kernel(
 triton kernels are harder to debug than Python, but the ecosystem provides solid tools for numerical verification, profiling, and inspecting compiled code.
 
 ## Numerical correctness: compare against torch reference
-```python
+```bash
 
 import torch
 
@@ -506,7 +510,7 @@ def test_kernel(fn_triton, fn_reference, *args, rtol=1e-3, atol=1e-3):
 
 ```
 ## Print inside kernel (use tl.device_print)
-```python
+```bash
 
 import triton
 import triton.language as tl
@@ -525,7 +529,7 @@ def debug_kernel(x_ptr, n, BLOCK: tl.constexpr):
 ```
 
 ## Launch the debug kernel
-```python
+```bash
 
 x = torch.arange(16, device="cuda", dtype=torch.float32)
 
@@ -538,9 +542,9 @@ debug_kernel[grid](
 )
 ```
 ##  Inspect PTX / LLVM IR
-```python
+```bash
 
-kernel_instance = add_kernel[(grid,)](
+kernel_instance = add_kernel[grid](
     x,
     y,
     out,
@@ -558,7 +562,7 @@ print(add_kernel.asm["ttir"])
 print(add_kernel.asm["llir"])
 ```
 ## Benchmarking with triton.testing
-```python
+```bash
 
 
 import triton
